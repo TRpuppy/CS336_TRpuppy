@@ -1,0 +1,10 @@
+*/__pycache__
+*/.pytest_cache
+*/.venv
+*/data
+*/output
+/Notes
+*/myenv
+*/cs336
+*/cs336_basics
+*/cs336_basics.egg-info
