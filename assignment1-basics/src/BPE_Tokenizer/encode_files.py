@@ -7,6 +7,7 @@ from typing import List, Tuple, BinaryIO
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 import multiprocessing
+import numpy as np
 
 from .BPE import BPE
 
@@ -133,18 +134,17 @@ def encode_chunk(
         # 编码
         tokens = tokenizer.encode(content)
         
-        # 保存到临时文件
-        temp_file = os.path.join(temp_dir, f"chunk_{chunk_id}.pkl")
-        with open(temp_file, 'wb') as f:
-            pickle.dump(tokens, f)
+        # 转换为numpy uint16数组并保存为npy格式
+        tokens_array = np.array(tokens, dtype=np.uint16)
+        temp_file = os.path.join(temp_dir, f"chunk_{chunk_id}.npy")
+        np.save(temp_file, tokens_array)
         
         return temp_file
     except Exception as e:
         print(f"Error encoding chunk {chunk_id}: {e}")
         # 返回空结果
-        temp_file = os.path.join(temp_dir, f"chunk_{chunk_id}.pkl")
-        with open(temp_file, 'wb') as f:
-            pickle.dump([], f)
+        temp_file = os.path.join(temp_dir, f"chunk_{chunk_id}.npy")
+        np.save(temp_file, np.array([], dtype=np.uint16))
         return temp_file
 
 
@@ -195,10 +195,10 @@ def encode_chunk_binary(
         # 编码
         tokens = tokenizer.encode(content)
         
-        # 保存到临时文件
-        temp_file = os.path.join(temp_dir, f"chunk_{chunk_id}.pkl")
-        with open(temp_file, 'wb') as f:
-            pickle.dump(tokens, f)
+        # 转换为numpy uint16数组并保存为npy格式
+        tokens_array = np.array(tokens, dtype=np.uint16)
+        temp_file = os.path.join(temp_dir, f"chunk_{chunk_id}.npy")
+        np.save(temp_file, tokens_array)
         
         return temp_file
     except Exception as e:
@@ -206,15 +206,14 @@ def encode_chunk_binary(
         import traceback
         traceback.print_exc()
         # 返回空结果
-        temp_file = os.path.join(temp_dir, f"chunk_{chunk_id}.pkl")
-        with open(temp_file, 'wb') as f:
-            pickle.dump([], f)
+        temp_file = os.path.join(temp_dir, f"chunk_{chunk_id}.npy")
+        np.save(temp_file, np.array([], dtype=np.uint16))
         return temp_file
 
 
 def merge_two_files(file1: str, file2: str, output_file: str) -> None:
     """
-    合并两个临时文件（内存方式，适用于小文件）
+    合并两个npy文件（使用内存映射，支持流式读取，适用于大文件）
     
     Args:
         file1: 第一个文件路径
@@ -228,18 +227,15 @@ def merge_two_files(file1: str, file2: str, output_file: str) -> None:
         if not os.path.exists(file2):
             raise FileNotFoundError(f"File not found: {file2}")
         
-        # 加载两个文件
-        with open(file1, 'rb') as f:
-            tokens1 = pickle.load(f)
-        with open(file2, 'rb') as f:
-            tokens2 = pickle.load(f)
+        # 使用内存映射加载两个文件（流式读取，不一次性加载到内存）
+        tokens1 = np.load(file1, mmap_mode='r')
+        tokens2 = np.load(file2, mmap_mode='r')
         
-        # 合并
-        merged_tokens = tokens1 + tokens2
+        # 合并（numpy的concatenate会自动处理内存映射的数组）
+        merged_tokens = np.concatenate([tokens1, tokens2])
         
         # 保存到输出文件
-        with open(output_file, 'wb') as f:
-            pickle.dump(merged_tokens, f)
+        np.save(output_file, merged_tokens)
         
         # 验证输出文件已创建
         if not os.path.exists(output_file):
@@ -256,71 +252,17 @@ def merge_two_files(file1: str, file2: str, output_file: str) -> None:
         traceback.print_exc()
         raise  # 重新抛出异常，让调用者知道合并失败
 
-
-def merge_two_files_streaming(file1: str, file2: str, output_file: str) -> None:
+def merge_files_sequential(file_list: List[str], output_file: str, temp_dir: str = None, pbar: tqdm = None, chunk_size: int = 10 * 1024 * 1024) -> None:
     """
-    流式合并两个文件（避免一次性加载到内存，适用于大文件）
-    使用分批处理来减少内存占用
-    
-    Args:
-        file1: 第一个文件路径
-        file2: 第二个文件路径
-        output_file: 输出文件路径
-    """
-    try:
-        # 检查文件是否存在
-        if not os.path.exists(file1):
-            raise FileNotFoundError(f"File not found: {file1}")
-        if not os.path.exists(file2):
-            raise FileNotFoundError(f"File not found: {file2}")
-        
-        # 由于pickle格式的限制，我们无法真正流式追加
-        # 但我们可以通过分批处理来减少峰值内存占用
-        # 方法：先读取file1，然后读取file2，合并后写入
-        
-        # 读取第一个文件
-        with open(file1, 'rb') as f1:
-            tokens1 = pickle.load(f1)
-        
-        # 读取第二个文件
-        with open(file2, 'rb') as f2:
-            tokens2 = pickle.load(f2)
-        
-        # 合并（这里仍然需要将两个列表连接，但至少我们不会同时持有三个大列表）
-        merged_tokens = tokens1 + tokens2
-        
-        # 立即释放tokens1和tokens2的内存
-        del tokens1, tokens2
-        
-        # 写入输出文件
-        with open(output_file, 'wb') as out_f:
-            pickle.dump(merged_tokens, out_f)
-        
-        # 释放merged_tokens的内存
-        del merged_tokens
-        
-        # 删除临时文件
-        if os.path.exists(file1):
-            os.remove(file1)
-        if os.path.exists(file2):
-            os.remove(file2)
-            
-    except Exception as e:
-        import traceback
-        print(f"Error streaming merge files {file1} and {file2} -> {output_file}: {e}")
-        traceback.print_exc()
-        raise
-
-
-def merge_files_sequential(file_list: List[str], output_file: str, temp_dir: str = None, pbar: tqdm = None) -> None:
-    """
-    串行合并多个文件（流式方式，避免一次性加载所有文件到内存）
+    一次性合并多个文件到最终输出（流式方式，避免一次性加载所有文件到内存）
+    使用内存映射和分批处理，加速合并过程
     
     Args:
         file_list: 文件路径列表
         output_file: 最终输出文件路径
         temp_dir: 临时文件目录（如果为None，使用输出文件所在目录）
         pbar: 进度条对象
+        chunk_size: 每次处理的元素数量（默认约10M个uint16，约20MB）
     """
     if len(file_list) == 0:
         return
@@ -331,40 +273,81 @@ def merge_files_sequential(file_list: List[str], output_file: str, temp_dir: str
             shutil.move(file_list[0], output_file)
         return
     
-    # 确定临时文件目录
-    if temp_dir is None:
-        temp_dir = os.path.dirname(output_file) or '.'
-    
-    # 逐个合并文件
-    current_result = file_list[0]
-    
-    for i in range(1, len(file_list)):
-        next_file = file_list[i]
+    try:
+        # 步骤1: 计算所有文件的总长度
+        total_len = 0
+        file_lengths = []
+        for file_path in file_list:
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"File not found: {file_path}")
+            # 使用内存映射打开文件获取长度（不加载数据）
+            data = np.load(file_path, mmap_mode='r')
+            file_len = len(data)
+            file_lengths.append((file_path, file_len))
+            total_len += file_len
+            del data  # 立即释放内存映射
         
-        if i == len(file_list) - 1:
-            # 最后一个文件，直接合并到最终输出
-            temp_output = output_file
-        else:
-            # 中间结果，使用临时文件
-            temp_output = os.path.join(temp_dir, f"sequential_merge_{i}.pkl")
+        if total_len == 0:
+            # 所有文件都为空，创建空输出文件
+            np.save(output_file, np.array([], dtype=np.uint16))
+            # 删除输入文件
+            for file_path, _ in file_lengths:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            return
         
-        # 合并当前结果和下一个文件
-        merge_two_files_streaming(current_result, next_file, temp_output)
+        # 步骤2: 创建输出文件的内存映射（写入模式）
+        temp_output = output_file + '.tmp'
+        output_mmap = np.memmap(temp_output, dtype=np.uint16, mode='w+', shape=(total_len,))
         
-        # 如果current_result是临时文件，删除它
-        if current_result != file_list[0] and os.path.exists(current_result):
-            os.remove(current_result)
+        # 步骤3: 按顺序将所有文件的内容复制到输出文件中（分批处理）
+        offset = 0
+        for file_path, file_len in file_lengths:
+            # 使用内存映射打开文件（只读模式，不加载到内存）
+            input_mmap = np.load(file_path, mmap_mode='r')
+            
+            # 分批复制数据
+            for start in range(0, file_len, chunk_size):
+                end = min(start + chunk_size, file_len)
+                # 从内存映射中读取chunk（创建小的数组副本）
+                chunk = np.array(input_mmap[start:end], copy=True)
+                output_mmap[offset:offset + len(chunk)] = chunk
+                offset += len(chunk)
+                output_mmap.flush()  # 确保数据写入磁盘
+            
+            # 释放输入文件的内存映射
+            del input_mmap
+            
+            # 更新进度条
+            if pbar:
+                pbar.update(1)
         
-        current_result = temp_output
+        # 步骤4: 关闭输出内存映射
+        del output_mmap
         
-        if pbar:
-            pbar.update(1)
-    
-    # 确保最终文件是正确的
-    if current_result != output_file and os.path.exists(current_result):
-        if os.path.exists(output_file):
-            os.remove(output_file)
-        shutil.move(current_result, output_file)
+        # 步骤5: 将临时文件转换为npy格式
+        temp_data = np.memmap(temp_output, dtype=np.uint16, mode='r', shape=(total_len,))
+        np.save(output_file, temp_data)
+        del temp_data
+        
+        # 删除临时文件
+        if os.path.exists(temp_output):
+            os.remove(temp_output)
+        
+        # 验证输出文件已创建
+        if not os.path.exists(output_file):
+            raise RuntimeError(f"Failed to create output file: {output_file}")
+        
+        # 步骤6: 删除所有输入文件
+        for file_path, _ in file_lengths:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        
+    except Exception as e:
+        import traceback
+        print(f"Error in sequential merge: {e}")
+        traceback.print_exc()
+        raise
 
 
 def binary_merge_files(
@@ -429,7 +412,7 @@ def binary_merge_files(
             file1 = file_list[i]
             file2 = file_list[i + 1]
             # 使用层级和计数器生成唯一文件名
-            output = os.path.join(temp_dir, f"merge_L{level}_{merge_counter}.pkl")
+            output = os.path.join(temp_dir, f"merge_L{level}_{merge_counter}.npy")
             merge_tasks.append((file1, file2, output))
             next_level_files.append(output)
             merge_counter += 1
@@ -472,7 +455,7 @@ def encode_file(
         file_path: 输入文件路径
         vocab_path: vocab文件路径
         merges_path: merges文件路径
-        output_path: 输出文件路径（pickle格式，包含token ID列表）
+        output_path: 输出文件路径（npy格式，包含token ID数组，uint16类型）
         special_tokens: 特殊token列表
         chunk_size_mb: 块大小（MB）
         max_workers: 最大worker数
@@ -535,9 +518,9 @@ def encode_file(
         print(f"合并完成，结果保存到: {output_path}")
         
         # 验证输出文件
-        with open(output_path, 'rb') as f:
-            final_tokens = pickle.load(f)
+        final_tokens = np.load(output_path, mmap_mode='r')
         print(f"最终token数量: {len(final_tokens):,}")
+        del final_tokens  # 释放内存映射
         
     finally:
         # 清理临时目录
@@ -582,7 +565,7 @@ def encode_directory(
     
     # 处理每个文件
     for txt_file in tqdm(txt_files, desc="处理文件", unit="file"):
-        output_file = output_path / f"{txt_file.stem}_encoded.pkl"
+        output_file = output_path / f"{txt_file.stem}_encoded.npy"
         print(f"\n处理文件: {txt_file.name}")
         encode_file(
             str(txt_file),
@@ -629,7 +612,7 @@ if __name__ == "__main__":
         if not args.output:
             # 默认输出到同目录
             input_path = Path(args.input)
-            args.output = str(input_path.parent / f"{input_path.stem}_encoded.pkl")
+            args.output = str(input_path.parent / f"{input_path.stem}_encoded.npy")
         encode_file(
             args.input,
             args.vocab,
