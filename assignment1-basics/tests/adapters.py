@@ -10,7 +10,7 @@ import torch
 from torch import Tensor
 
 
-from src.Layers.layers import Linear, Embedding
+from src.Utils.layers import Linear, Embedding
 def run_linear(
     d_in: int,
     d_out: int,
@@ -56,7 +56,7 @@ def run_embedding(
     embedding.Embedding_matrix.data = weights
     return embedding(token_ids)
 
-from src.Layers.layers import SwiGLU
+from src.Utils.layers import SwiGLU
 def run_swiglu(
     d_model: int,
     d_ff: int,
@@ -92,7 +92,7 @@ def run_swiglu(
     swiglu.w3.weight.data = w3_weight
     return swiglu(in_features)
 
-from src.Layers.layers import scaled_dot_product_attention
+from src.Utils.layers import scaled_dot_product_attention
 def run_scaled_dot_product_attention(
     Q: Float[Tensor, " ... queries d_k"],
     K: Float[Tensor, " ... keys d_k"],
@@ -115,7 +115,7 @@ def run_scaled_dot_product_attention(
     sdp_attention = scaled_dot_product_attention(d_k)
     return sdp_attention(Q, K, V, mask)
 
-from src.Layers.layers import multihead_self_attention
+from src.Utils.layers import multihead_self_attention
 def run_multihead_self_attention(
     d_model: int,
     num_heads: int,
@@ -155,7 +155,7 @@ def run_multihead_self_attention(
     return msa(in_features)
 
 
-from src.Layers.layers import RoPE
+from src.Utils.layers import RoPE
 def run_multihead_self_attention_with_rope(
     d_model: int,
     num_heads: int,
@@ -224,7 +224,7 @@ def run_rope(
     rope = RoPE(theta, d_k, max_seq_len)
     return rope(in_query_or_key, token_positions)
 
-from src.Layers.layers import TransformerBlock
+from src.Utils.layers import TransformerBlock
 def run_transformer_block(
     d_model: int,
     num_heads: int,
@@ -307,7 +307,7 @@ def run_transformer_block(
     transformer_block.rms_norm2.weight.data = weights["ln2.weight"]
     return transformer_block(in_features)
 
-from src.Layers.layers import TransformerLM
+from src.Utils.layers import TransformerLM
 def run_transformer_lm(
     vocab_size: int,
     context_length: int,
@@ -389,7 +389,17 @@ def run_transformer_lm(
     """
     transformer_lm = TransformerLM(vocab_size, d_model, num_layers, num_heads, d_ff, rope_theta, context_length)
     transformer_lm.token_embeddings.Embedding_matrix.data = weights["token_embeddings.weight"]
+    assert weights["token_embeddings.weight"].shape == transformer_lm.token_embeddings.Embedding_matrix.shape
     for i in range(num_layers):
+        assert weights[f"layers.{i}.attn.q_proj.weight"].shape == transformer_lm.layers[i].msa.W_q.shape
+        assert weights[f"layers.{i}.attn.k_proj.weight"].shape == transformer_lm.layers[i].msa.W_k.shape
+        assert weights[f"layers.{i}.attn.v_proj.weight"].shape == transformer_lm.layers[i].msa.W_v.shape
+        assert weights[f"layers.{i}.attn.output_proj.weight"].shape == transformer_lm.layers[i].msa.W_o.shape
+        assert weights[f"layers.{i}.ln1.weight"].shape == transformer_lm.layers[i].rms_norm1.weight.shape
+        assert weights[f"layers.{i}.ffn.w1.weight"].shape == transformer_lm.layers[i].swiglu.w1.weight.shape
+        assert weights[f"layers.{i}.ffn.w2.weight"].shape == transformer_lm.layers[i].swiglu.w2.weight.shape
+        assert weights[f"layers.{i}.ffn.w3.weight"].shape == transformer_lm.layers[i].swiglu.w3.weight.shape
+        assert weights[f"layers.{i}.ln2.weight"].shape == transformer_lm.layers[i].rms_norm2.weight.shape
         transformer_lm.layers[i].msa.W_q.data = weights[f"layers.{i}.attn.q_proj.weight"]
         transformer_lm.layers[i].msa.W_k.data = weights[f"layers.{i}.attn.k_proj.weight"]
         transformer_lm.layers[i].msa.W_v.data = weights[f"layers.{i}.attn.v_proj.weight"]
@@ -401,9 +411,11 @@ def run_transformer_lm(
         transformer_lm.layers[i].rms_norm2.weight.data = weights[f"layers.{i}.ln2.weight"]
     transformer_lm.rms_norm_final.weight.data = weights["ln_final.weight"]
     transformer_lm.Linear_final.weight.data = weights["lm_head.weight"]
+    assert weights["ln_final.weight"].shape == transformer_lm.rms_norm_final.weight.shape
+    assert weights["lm_head.weight"].shape == transformer_lm.Linear_final.weight.shape
     return transformer_lm(in_indices)
 
-from src.Layers.layers import RMSNorm
+from src.Utils.layers import RMSNorm
 def run_rmsnorm(
     d_model: int,
     eps: float,
@@ -463,9 +475,10 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    raise NotImplementedError
+    from src.Utils.Training_loop_utils import data_loader
+    return data_loader(dataset, batch_size, context_length, device)
 
-from src.Layers.layers import Softmax
+from src.Utils.layers import Softmax
 def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
     """
     Given a tensor of inputs, return the output of softmaxing the given `dim`
@@ -481,7 +494,7 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
     """
     return Softmax(in_features , dim)
 
-
+from src.Utils.layers import CrossEntropyLoss
 def run_cross_entropy(inputs: Float[Tensor, " batch_size vocab_size"], targets: Int[Tensor, " batch_size"]) -> Float[Tensor, ""]:
     """Given a tensor of inputs and targets, compute the average cross-entropy
     loss across examples.
@@ -495,9 +508,10 @@ def run_cross_entropy(inputs: Float[Tensor, " batch_size vocab_size"], targets: 
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    cross_entropy = CrossEntropyLoss()
+    return cross_entropy(inputs, targets)
 
-
+from src.Utils.utils import gradient_clipping
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
     """Given a set of parameters, clip their combined gradients to have l2 norm at most max_l2_norm.
 
@@ -507,16 +521,16 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    gradient_clipping(parameters, max_l2_norm)
 
-
+from src.Utils.utils import AdamW
 def get_adamw_cls() -> type[torch.optim.Optimizer]:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
     """
-    raise NotImplementedError
+    return AdamW
 
-
+from src.Utils.utils import lr_cosine_schedule
 def run_get_lr_cosine_schedule(
     it: int,
     max_learning_rate: float,
@@ -542,7 +556,7 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    return lr_cosine_schedule(max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters)(it)
 
 
 def run_save_checkpoint(
@@ -561,7 +575,8 @@ def run_save_checkpoint(
             we've completed.
         out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    raise NotImplementedError
+    from src.Utils.Training_loop_utils import save_checkpoint
+    save_checkpoint(model, optimizer, iteration, out)
 
 
 def run_load_checkpoint(
@@ -582,7 +597,8 @@ def run_load_checkpoint(
     Returns:
         int: the previously-serialized number of iterations.
     """
-    raise NotImplementedError
+    from src.Utils.Training_loop_utils import load_checkpoint
+    return load_checkpoint(src, model, optimizer)
 
 from src.BPE_Tokenizer.BPE import BPE
 def get_tokenizer(
@@ -611,8 +627,7 @@ from src.BPE_Tokenizer.Train_BPE import train_bpe
 def run_train_bpe(
     input_path: str | os.PathLike,
     vocab_size: int,
-    special_tokens: list[str],
-    **kwargs,
+    special_tokens: list[str]
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     """Given the path to an input corpus, run train a BPE tokenizer and
     output its vocabulary and merges.

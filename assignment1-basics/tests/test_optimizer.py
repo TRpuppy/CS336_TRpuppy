@@ -42,12 +42,14 @@ def test_adamw(numpy_snapshot):
     # Might need to exit early if the weights match pytorch, since that should also be valid
     matches_pytorch = torch.allclose(actual_weights, pytorch_weights, atol=1e-4)
     if matches_pytorch:
+        print("AdamW matches PyTorch")
         return
     
     numpy_snapshot.assert_match(
         actual_weights,
         atol=1e-4,
     )
+    print("AdamW matches CS336 implementation")
 
 
 def test_get_lr_cosine_schedule():
